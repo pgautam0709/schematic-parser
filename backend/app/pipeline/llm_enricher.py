@@ -1,7 +1,12 @@
 from __future__ import annotations
 import json
 import logging
-from app.config import ANTHROPIC_API_KEY
+from app.config import (
+    AZURE_OPENAI_API_KEY,
+    AZURE_OPENAI_ENDPOINT,
+    AZURE_OPENAI_DEPLOYMENT,
+    AZURE_OPENAI_API_VERSION,
+)
 from app.pipeline.spatial_parser import RawBlock
 
 logger = logging.getLogger(__name__)
@@ -28,43 +33,42 @@ OUTPUT FORMAT:
 
 def enrich_page(raw_text: str, page_num: int) -> list[RawBlock]:
     """
-    Call Claude to extract device blocks from a page's raw text.
+    Call Azure OpenAI GPT-4o to extract device blocks from a page's raw text.
     Returns a list of RawBlock objects (source='llm').
-    Only called when spatial parsing is insufficient.
+    Mandatory pipeline stage — raises RuntimeError if Azure credentials are missing.
     """
-    if not ANTHROPIC_API_KEY:
-        logger.warning("ANTHROPIC_API_KEY not set; skipping LLM enrichment")
-        return []
+    if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
+        raise RuntimeError(
+            "Azure OpenAI credentials not configured. "
+            "Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT in your .env file."
+        )
+
+    from openai import AzureOpenAI
+
+    client = AzureOpenAI(
+        api_key=AZURE_OPENAI_API_KEY,
+        azure_endpoint=AZURE_OPENAI_ENDPOINT,
+        api_version=AZURE_OPENAI_API_VERSION,
+    )
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
+        response = client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
             max_tokens=4096,
-            system=[
-                {
-                    "type": "text",
-                    "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
+            response_format={"type": "json_object"},
             messages=[
-                {
-                    "role": "user",
-                    "content": f"Page {page_num} raw text:\n{raw_text}",
-                }
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Page {page_num} raw text:\n{raw_text}"},
             ],
         )
 
-        content = response.content[0].text
+        content = response.choices[0].message.content
         data = json.loads(content)
         return _parse_llm_response(data, page_num)
 
     except Exception as e:
         logger.error(f"LLM enrichment failed for page {page_num}: {e}")
-        return []
+        raise
 
 
 def _parse_llm_response(data: dict, page_num: int) -> list[RawBlock]:

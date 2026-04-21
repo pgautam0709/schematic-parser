@@ -50,7 +50,7 @@ schematic-parser/
 │   │   │   ├── extractor.py        # Stage 1 — pdfplumber word extraction
 │   │   │   ├── spatial_parser.py   # Stage 2 — spatial block detection
 │   │   │   ├── regex_pass.py       # Stage 3 — regex cross-validation
-│   │   │   ├── llm_enricher.py     # Stage 4 — Claude API fallback
+│   │   │   ├── llm_enricher.py     # Stage 4 — Azure OpenAI GPT-4o enrichment
 │   │   │   ├── normalizer.py       # Stage 5 — DT suffix strip + row expansion
 │   │   │   ├── validator.py        # Stage 6 — structural checks
 │   │   │   └── orchestrator.py     # Wires all stages, updates DB status
@@ -107,10 +107,9 @@ PDF file
   │   Counts CN:/DT: patterns in raw text. If spatial parser
   │   found fewer DTs than regex found, LLM stage is triggered.
   │
-  ▼ Stage 4 — LLM Enrichment (Claude claude-sonnet-4-6) [optional]
-  │   Called only when spatial parsing is incomplete.
-  │   Uses prompt caching to reduce API cost across multi-page PDFs.
-  │   Fills gaps not covered by spatial parser.
+  ▼ Stage 4 — LLM Enrichment (Azure OpenAI GPT-4o) [mandatory]
+  │   Always called for every page.
+  │   Fills gaps not covered by spatial parser and validates spatial results.
   │
   ▼ Stage 5 — Normalisation
   │   • Strips DT variant suffix: DT-WU5T-14F141-AJX_K → DT-WU5T-14F141-AJX
@@ -163,7 +162,7 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env — set ANTHROPIC_API_KEY if LLM fallback is needed
+# Edit .env — set AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
 
 # Start the API server
 uvicorn app.main:app --reload --port 8000
@@ -186,7 +185,10 @@ The Vite dev server proxies `/api/*` requests to `http://localhost:8000`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | *(empty)* | Required only when LLM fallback is triggered |
+| `AZURE_OPENAI_API_KEY` | *(required)* | Azure OpenAI API key |
+| `AZURE_OPENAI_ENDPOINT` | *(required)* | Azure OpenAI resource endpoint URL |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` | Deployment name for the GPT-4o model |
+| `AZURE_OPENAI_API_VERSION` | `2024-05-01-preview` | Azure OpenAI API version |
 | `DATABASE_URL` | `sqlite:///../../data/schematic_parser.db` | SQLAlchemy connection string |
 | `UPLOAD_DIR` | `../../data/uploads` | Directory where uploaded PDFs are stored |
 | `MAX_CONCURRENT_JOBS` | `3` | Max simultaneous pipeline runs |
@@ -216,23 +218,15 @@ all 9 rows match the ground truth in `tests/expected_output.json`.
 
 ## LLM Usage & Accuracy
 
-The Claude claude-sonnet-4-6 model is used as a **fallback only** — it is not called when spatial
-parsing succeeds. The trigger condition is:
+Azure OpenAI GPT-4o is a **mandatory pipeline stage** — it runs on every page regardless
+of spatial parser results. Its output is merged with the spatial results, with spatial
+findings taking precedence and GPT-4o filling any gaps.
 
-```
-spatial_dt_count < regex_dt_count
-```
+The merge strategy ensures spatial parser results are never overwritten; GPT-4o only
+contributes DT entries not already found by the spatial parser.
 
-If the spatial parser finds fewer DTs than the raw-text regex count, Claude is invoked
-with the full page text to extract device→CN→DT mappings, and its output is merged with
-the spatial results.
-
-**Prompt caching** is enabled on the system prompt (via `cache_control: ephemeral`),
-so repeated calls on the same model session reuse the cached prompt — reducing latency
-and cost for large, multi-page PDFs.
-
-For the sample PDF (`P736_BCM (1).pdf`), the spatial parser correctly finds all 9 entries
-without LLM involvement.
+For the sample PDF (`P736_BCM (1).pdf`), the spatial parser correctly finds all 9 entries;
+GPT-4o enrichment confirms and may supplement these results.
 
 ---
 
