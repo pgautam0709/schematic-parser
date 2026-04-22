@@ -35,3 +35,8 @@ export function exportUrl(uploadId: string, format: 'csv' | 'xlsx'): string {
 export async function deleteJob(uploadId: string): Promise<void> {
   await fetch(`${BASE}/jobs/${uploadId}`, { method: 'DELETE' });
 }
+
+export async function deleteAllJobs(): Promise<void> {
+  const res = await fetch(`${BASE}/jobs`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await res.text());
+}

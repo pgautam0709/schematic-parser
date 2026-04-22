@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { JobStatus } from './types/api';
 import { useUpload } from './hooks/useUpload';
 import { useResults } from './hooks/useResults';
+import { deleteAllJobs } from './api/client';
 import { UploadZone } from './components/UploadZone';
 import { JobList } from './components/JobList';
 import { ResultsTable } from './components/ResultsTable';
@@ -10,6 +11,7 @@ import { ExportBar } from './components/ExportBar';
 export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedJob, setSelectedJob] = useState<JobStatus | null>(null);
+  const [clearing, setClearing] = useState(false);
   const { upload, uploading, error: uploadError } = useUpload();
   const { data: results, loading: resultsLoading } = useResults(
     selectedJob?.upload_id ?? null,
@@ -19,6 +21,18 @@ export default function App() {
   async function handleUpload(files: File[]) {
     await upload(files);
     setRefreshKey(k => k + 1);
+  }
+
+  async function handleClearAll() {
+    if (!window.confirm('Delete all jobs and parsed data? This cannot be undone.')) return;
+    setClearing(true);
+    try {
+      await deleteAllJobs();
+      setSelectedJob(null);
+      setRefreshKey(k => k + 1);
+    } finally {
+      setClearing(false);
+    }
   }
 
   return (
@@ -42,12 +56,31 @@ export default function App() {
         </section>
 
         <section style={{ marginBottom: 32 }}>
-          <h2 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 600, color: '#334155' }}>
-            Parse Jobs
-            <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 13, marginLeft: 8 }}>
-              (click a completed job to view results)
-            </span>
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#334155' }}>
+              Parse Jobs
+              <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 13, marginLeft: 8 }}>
+                (click a completed job to view results)
+              </span>
+            </h2>
+            <button
+              onClick={handleClearAll}
+              disabled={clearing}
+              style={{
+                padding: '6px 14px',
+                fontSize: 13,
+                fontWeight: 500,
+                color: clearing ? '#94a3b8' : '#dc2626',
+                background: '#fff',
+                border: '1px solid',
+                borderColor: clearing ? '#e2e8f0' : '#fca5a5',
+                borderRadius: 6,
+                cursor: clearing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {clearing ? 'Clearing…' : 'Clear All'}
+            </button>
+          </div>
           <JobList refreshKey={refreshKey} onSelect={setSelectedJob} selectedId={selectedJob?.upload_id ?? null} />
         </section>
 
