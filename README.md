@@ -153,20 +153,23 @@ PDF file
 ```bash
 cd backend
 
-# Create virtual environment
+# Create virtual environment and install dependencies
 python3 -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
 # Edit .env — set AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
 
-# Start the API server
-uvicorn app.main:app --reload --port 8000
+# Start the API server (always use the venv's uvicorn explicitly)
+bash start.sh
+# or equivalently:
+# PYTHONPATH=. .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
+
+> **Important:** Always start the server with `.venv/bin/uvicorn` (or `bash start.sh`).
+> Running a bare `uvicorn` command uses the system Python, which does not have
+> `pdfplumber` installed, causing every pipeline job to fail.
 
 ### Frontend
 

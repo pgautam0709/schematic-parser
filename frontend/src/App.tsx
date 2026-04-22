@@ -35,6 +35,10 @@ export default function App() {
     }
   }
 
+  function handleDeleted(uploadId: string) {
+    if (selectedJob?.upload_id === uploadId) setSelectedJob(null);
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: '#f8fafc', fontFamily: 'system-ui, sans-serif' }}>
       <div style={{ background: '#1e3a5f', padding: '16px 32px', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -81,7 +85,7 @@ export default function App() {
               {clearing ? 'Clearing…' : 'Clear All'}
             </button>
           </div>
-          <JobList refreshKey={refreshKey} onSelect={setSelectedJob} selectedId={selectedJob?.upload_id ?? null} />
+          <JobList refreshKey={refreshKey} onSelect={setSelectedJob} onDeleted={handleDeleted} selectedId={selectedJob?.upload_id ?? null} />
         </section>
 
         {selectedJob && (

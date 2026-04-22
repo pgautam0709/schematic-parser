@@ -1,16 +1,33 @@
 import { useEffect, useState } from 'react';
-import { listJobs } from '../api/client';
+import { listJobs, deleteJob } from '../api/client';
 import type { JobStatus } from '../types/api';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
   refreshKey: number;
   onSelect: (job: JobStatus) => void;
+  onDeleted: (uploadId: string) => void;
   selectedId: string | null;
 }
 
-export function JobList({ refreshKey, onSelect, selectedId }: Props) {
+export function JobList({ refreshKey, onSelect, onDeleted, selectedId }: Props) {
   const [jobs, setJobs] = useState<JobStatus[]>([]);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  async function handleDelete(e: React.MouseEvent, uploadId: string) {
+    e.stopPropagation(); // prevent row click / select
+    if (!confirm('Delete this job and its results?')) return;
+    setDeleting(uploadId);
+    try {
+      await deleteJob(uploadId);
+      setJobs(prev => prev.filter(j => j.upload_id !== uploadId));
+      onDeleted(uploadId);
+    } catch {
+      alert('Failed to delete job.');
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -34,7 +51,7 @@ export function JobList({ refreshKey, onSelect, selectedId }: Props) {
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
         <thead>
           <tr style={{ background: '#f8fafc' }}>
-            {['File', 'Status', 'Pages', 'Rows', 'Date'].map(h => (
+            {['File', 'Status', 'Pages', 'Rows', 'Date', ''].map(h => (
               <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 600, color: '#475569', borderBottom: '1px solid #e2e8f0' }}>
                 {h}
               </th>
@@ -67,6 +84,25 @@ export function JobList({ refreshKey, onSelect, selectedId }: Props) {
               <td style={{ padding: '10px 12px', color: '#64748b' }}>{job.row_count ?? '—'}</td>
               <td style={{ padding: '10px 12px', color: '#94a3b8', fontSize: 12 }}>
                 {new Date(job.created_at).toLocaleString()}
+              </td>
+              <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                <button
+                  onClick={e => handleDelete(e, job.upload_id)}
+                  disabled={deleting === job.upload_id}
+                  title="Delete job"
+                  style={{
+                    background: 'none',
+                    border: '1px solid #fca5a5',
+                    borderRadius: 5,
+                    color: '#ef4444',
+                    cursor: deleting === job.upload_id ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                    padding: '3px 9px',
+                    opacity: deleting === job.upload_id ? 0.5 : 1,
+                  }}
+                >
+                  {deleting === job.upload_id ? '…' : '🗑 Delete'}
+                </button>
               </td>
             </tr>
           ))}
