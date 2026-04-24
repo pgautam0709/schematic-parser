@@ -2,8 +2,6 @@
 
 A web application that parses electrical schematic PDFs and extracts a **Device → Device Tree (DT)** mapping table — one row per connector variant, ready for download.
 
-
-
 ---
 
 ## What it does
@@ -25,7 +23,9 @@ The parser extracts these annotations, strips the variant suffix from DT values,
 | 6 | 1 | PDB-EXT | DT-W3KT-14D068-HA |
 | 7 | 1 | SN-BMS | DT-PZ3T-10C652-AX |
 | 8 | 1 | BATT-POSTIVE | DT-R1MT-10655-AA |
-| 9 | 1 | *(unnamed)* | DT-DS7T-10655-AA |
+| 9 | 1 | BATT-POSTIVE | DT-DS7T-10655-AA |
+
+> **Note:** Row 9 correctly carries `BATT-POSTIVE` — see [Dual-Source Battery Variants](#dual-source-battery-variants) below.
 
 ---
 
@@ -57,17 +57,17 @@ schematic-parser/
 │   │   └── utils/
 │   │       └── file_store.py       # PDF file storage helpers
 │   ├── tests/
-│   │   ├── expected_output.json    # Ground-truth for P736_BCM.pdf
+│   │   ├── expected_output.json    # Ground-truth for P736_BCM.pdf (9 rows)
 │   │   ├── test_normalizer.py      # Unit tests (DT suffix, row expansion)
 │   │   ├── test_extractor.py       # Unit tests (word extraction)
 │   │   └── test_pipeline_integration.py  # End-to-end correctness gate
 │   └── requirements.txt
 ├── frontend/                 # React + Vite + TypeScript UI
 │   └── src/
-│       ├── api/client.ts     # Typed fetch wrappers for all endpoints
+│       ├── api/client.ts     # Typed fetch wrappers (XHR upload with progress)
 │       ├── types/api.ts      # TypeScript interfaces
-│       ├── hooks/            # useUpload, useJobPoller, useResults
-│       └── components/       # UploadZone, JobList, ResultsTable, ExportBar
+│       ├── hooks/            # useResults
+│       └── components/       # UploadZone, JobList, ResultsTable, ResultsModal, ExportBar
 └── data/
     ├── uploads/              # Uploaded PDFs (organised by job UUID)
     └── schematic_parser.db   # SQLite database
@@ -77,7 +77,7 @@ schematic-parser/
 
 ## Parsing Pipeline
 
-The pipeline runs automatically in the background after each upload.
+The pipeline runs in a **background thread pool** after each upload, keeping the API responsive during processing.
 
 ```
 PDF file
@@ -95,6 +95,7 @@ PDF file
   │   Pattern B — Same-line (BATT-POSTIVE):
   │     Device label → CN: <cn1>  DT: <dt1>  (CN and DT on same line)
   │                     CN: <cn2>  DT: <dt2>
+  │     Both pairs share the same x0 column → grouped into ONE block.
   │
   │   Pattern C — Grouped (PDB-EXT):
   │     Device label → CN: <cn1>         (all CNs stacked first)
@@ -107,22 +108,87 @@ PDF file
   │   Counts CN:/DT: patterns in raw text. If spatial parser
   │   found fewer DTs than regex found, LLM stage is triggered.
   │
-  ▼ Stage 4 — LLM Enrichment (Azure OpenAI GPT-4o) [mandatory]
-  │   Always called for every page.
-  │   Fills gaps not covered by spatial parser and validates spatial results.
+  ▼ Stage 4 — LLM Enrichment (Azure OpenAI GPT-4o) [conditional]
+  │   Called only when spatial_dt_count < regex_dt_count.
+  │   Fills gaps not covered by spatial parser.
+  │   Gracefully skipped if Azure credentials are not configured.
   │
   ▼ Stage 5 — Normalisation
   │   • Strips DT variant suffix: DT-WU5T-14F141-AJX_K → DT-WU5T-14F141-AJX
   │   • Expands each block into individual rows (one per CN/DT pair)
-  │   • Device name repeated on all rows when DTs share the same part family
-  │     (PDB-EXT: DT-W3KT-14D068-* → all 5 rows get "PDB-EXT")
-  │   • Device set to null when DTs belong to different physical components
-  │     (BATT-POSTIVE row 9: DT-DS7T-10655-AA → null device)
+  │   • Device name repeated on all rows when DTs share the same part base number
+  │     (see Dual-Source Battery Variants below)
   │   • Global SR# assigned starting at 1 across all pages
   │
   ▼ Stage 6 — Validation
       Checks DT format, detects duplicates, verifies SR# continuity.
       Warnings are logged; processing always completes.
+```
+
+---
+
+## Key Finding: Dual-Source Battery Variants
+
+### Problem
+
+The `BATT-POSTIVE` block in the schematic contains two CN/DT pairs for the **same physical device position** — a 70AH and an 80AH battery, each sourced from a different manufacturer:
+
+```
+BATT-POSTIVE
+CN: R1MT-10655-AA    DT: DT-R1MT-10655-AA_A    70AH
+CN: DS7T-10655-AC    DT: DT-DS7T-10655-AA_D    80AH
+```
+
+The original normalizer compared the full DT manufacturer prefix (`DT-R1MT-10655` vs `DT-DS7T-10655`) to decide whether to repeat the device name across rows. Since the manufacturer codes differ (`R1MT` ≠ `DS7T`), it incorrectly treated them as separate physical components and set `device = null` on row 9.
+
+### Root Cause
+
+The manufacturer code (2nd segment of a DT value) identifies the **supplier**, not the component. Two DTs with different manufacturer codes but the same part base number represent **dual-source variants** of the same device:
+
+```
+DT - R1MT - 10655 - AA
+     ^^^^   ^^^^^
+     mfr    part base ← the identity of the physical component
+```
+
+### Fix
+
+The family comparison in `normalizer.py` was changed to use **only the part base number** (3rd segment), ignoring the manufacturer prefix:
+
+```python
+# Before (wrong): compared "DT-R1MT-10655" vs "DT-DS7T-10655" → different → null device
+families.add("-".join(parts[:3]))
+
+# After (correct): compared "10655" vs "10655" → same → device repeats
+part_bases.add(parts[2])
+```
+
+This correctly identifies `DT-R1MT-10655-AA` and `DT-DS7T-10655-AA` as variants of the same battery position, so `BATT-POSTIVE` now appears on both rows 8 and 9.
+
+---
+
+## Concurrency Model
+
+Each pipeline run executes in a **`ThreadPoolExecutor`** worker, not in the async event loop. This means:
+
+- The FastAPI event loop remains free to serve status-poll requests (every 1.5 s) while large PDFs are being parsed
+- Up to `MAX_CONCURRENT_JOBS` (default: 3) pipelines run in parallel
+- Each worker creates its own SQLAlchemy session (sessions are not thread-safe)
+
+```
+Upload request → FastAPI (event loop)
+                     │
+                     └─ BackgroundTasks.add_task(run_pipeline, upload_id)
+                              │
+                              └─ asyncio.run_in_executor(ThreadPoolExecutor)
+                                        │
+                                        └─ _run_pipeline_sync(upload_id)
+                                                │
+                                                ├─ SessionLocal() ← own DB session
+                                                ├─ pdfplumber extraction (blocking I/O)
+                                                ├─ spatial parser (CPU)
+                                                ├─ Azure OpenAI call (network I/O)
+                                                └─ normalizer / validator
 ```
 
 ---
@@ -138,6 +204,7 @@ PDF file
 | `GET` | `/api/export/{id}?format=csv` | Download results as CSV (UTF-8 BOM) |
 | `GET` | `/api/export/{id}?format=xlsx` | Download results as Excel |
 | `DELETE` | `/api/jobs/{id}` | Delete job, rows, and uploaded file |
+| `DELETE` | `/api/jobs` | Delete all jobs, rows, and uploaded files |
 
 ---
 
@@ -159,7 +226,7 @@ python3 -m venv .venv
 
 # Configure environment
 cp .env.example .env
-# Edit .env — set AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
+# Edit .env — set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT
 
 # Start the API server (always use the venv's uvicorn explicitly)
 bash start.sh
@@ -167,7 +234,7 @@ bash start.sh
 # PYTHONPATH=. .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
-> **Important:** Always start the server with `.venv/bin/uvicorn` (or `bash start.sh`).
+> **Important:** Always start the server with `bash start.sh` or `.venv/bin/uvicorn`.
 > Running a bare `uvicorn` command uses the system Python, which does not have
 > `pdfplumber` installed, causing every pipeline job to fail.
 
@@ -188,13 +255,13 @@ The Vite dev server proxies `/api/*` requests to `http://localhost:8000`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AZURE_OPENAI_API_KEY` | *(required)* | Azure OpenAI API key |
-| `AZURE_OPENAI_ENDPOINT` | *(required)* | Azure OpenAI resource endpoint URL |
+| `AZURE_OPENAI_API_KEY` | *(empty)* | Azure OpenAI API key — LLM stage skipped if unset |
+| `AZURE_OPENAI_ENDPOINT` | *(empty)* | Azure OpenAI resource endpoint URL |
 | `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` | Deployment name for the GPT-4o model |
 | `AZURE_OPENAI_API_VERSION` | `2024-05-01-preview` | Azure OpenAI API version |
 | `DATABASE_URL` | `sqlite:///../../data/schematic_parser.db` | SQLAlchemy connection string |
 | `UPLOAD_DIR` | `../../data/uploads` | Directory where uploaded PDFs are stored |
-| `MAX_CONCURRENT_JOBS` | `3` | Max simultaneous pipeline runs |
+| `MAX_CONCURRENT_JOBS` | `3` | Max simultaneous pipeline runs (thread pool size) |
 | `MAX_PDF_SIZE_MB` | `100` | Upload size limit per file |
 
 ---
@@ -209,27 +276,28 @@ pytest tests/ -v
 
 Expected output:
 ```
-tests/test_normalizer.py::test_strip_dt_suffix[...]   PASSED  (×9)
-tests/test_normalizer.py::test_normalize_*            PASSED  (×3)
+tests/test_normalizer.py::test_strip_dt_suffix[...]          PASSED  (×9)
+tests/test_normalizer.py::test_normalize_single_block        PASSED
+tests/test_normalizer.py::test_normalize_multi_cn_dt_block   PASSED
+tests/test_normalizer.py::test_normalize_same_line_pair_blocks PASSED
 tests/test_pipeline_integration.py::test_pipeline_produces_correct_rows  PASSED
 ```
 
-The integration test uploads `P736_BCM (1).pdf` through the full pipeline and asserts
-all 9 rows match the ground truth in `tests/expected_output.json`.
+The integration test runs the full pipeline on `P736_BCM_Example.pdf` and asserts all 9 rows — including `BATT-POSTIVE` on both rows 8 and 9 — match the ground truth in `tests/expected_output.json`.
 
 ---
 
 ## LLM Usage & Accuracy
 
-Azure OpenAI GPT-4o is a **mandatory pipeline stage** — it runs on every page regardless
-of spatial parser results. Its output is merged with the spatial results, with spatial
-findings taking precedence and GPT-4o filling any gaps.
+Azure OpenAI GPT-4o is a **conditional fallback** — it is only invoked when the spatial parser misses entries:
 
-The merge strategy ensures spatial parser results are never overwritten; GPT-4o only
-contributes DT entries not already found by the spatial parser.
+```
+spatial_dt_count < regex_dt_count  →  LLM triggered
+```
 
-For the sample PDF (`P736_BCM (1).pdf`), the spatial parser correctly finds all 9 entries;
-GPT-4o enrichment confirms and may supplement these results.
+If Azure credentials are not configured in `.env`, the LLM stage is gracefully skipped and the pipeline completes with spatial results only. For `P736_BCM_Example.pdf`, the spatial parser finds all 9 entries without LLM involvement.
+
+The merge strategy ensures spatial results take precedence; GPT-4o only contributes DT entries not already found spatially.
 
 ---
 
@@ -238,20 +306,47 @@ GPT-4o enrichment confirms and may supplement these results.
 | Rule | Detail |
 |------|--------|
 | DT suffix strip | `DT-<base>_<1-3 char suffix>` → `DT-<base>` |
-| Device name — same family | DTs sharing `DT-<mfr>-<part>` prefix → device repeated on all rows |
-| Device name — mixed family | Different part families in one block → device only on first row, null thereafter |
+| Device name — same part base | DTs sharing the same part base number (3rd segment) → device repeated on all rows |
+| Device name — dual-source variants | Different manufacturer codes, same part base → treated as same device family |
 | Duplicate rows | `(page, device, dt)` duplicates logged as warnings; first occurrence kept |
 | SR numbering | 1-based, globally sequential across all pages, never reset |
 | Variant labels | `(GAS LOW)`, `(FHEV)` etc. stored in `variant` column; stripped from CN values |
 
 ---
 
+## Frontend UX
+
+```
+UploadZone (drag-drop multi-PDF)
+  │
+  ├─ Per-file row appears immediately
+  │     [ filename ]  [ size ]  [ Ready ]  [ Parse ]
+  │
+  ├─ Click "Parse" → uploads with real progress bar (XHR)
+  │     [ filename ]  [ size ]  [ Uploading 63% ████░░ ]  [ Uploading… ]
+  │
+  ├─ Upload complete → pipeline starts
+  │     [ filename ]  [ size ]  [ Queued ]  [ Queued… ]
+  │     [ filename ]  [ size ]  [ Parsing 45% ███░░░ · 12 pages ]  [ Parsing… ]
+  │
+  └─ Done → button changes
+        [ filename ]  [ size ]  [ Done · 9 rows ]  [ View Results ]
+                                                          │
+                                                          └─ Opens ResultsModal overlay
+                                                               (SR#, Page, Device, DT table)
+                                                               (Export CSV / Excel buttons)
+                                                               (Esc or click outside to close)
+
+JobList (parse history — all past jobs)
+  └─ Each completed job has its own [ View Results ] button → same ResultsModal
+```
+
+**Upload behaviour for large files:** Files are uploaded **sequentially** (one at a time) using `XMLHttpRequest` with real byte-level progress reporting. This avoids saturating the network connection when multiple large PDFs are queued.
+
+---
+
 ## Scaling to Multiple PDFs
 
-Each uploaded PDF is processed as an independent background job. The frontend polls
-job status every 2 seconds and displays live progress. Up to `MAX_CONCURRENT_JOBS`
-pipelines run simultaneously (controlled by an asyncio semaphore).
+Each uploaded PDF is processed as an independent background job. The frontend polls job status every 1.5 seconds and displays live progress per file. Up to `MAX_CONCURRENT_JOBS` pipelines run simultaneously (controlled by a semaphore + thread pool).
 
-For production-scale batch processing, replace `FastAPI BackgroundTasks` with a
-task queue (e.g. Celery + Redis) — the `orchestrator.run_pipeline` interface is
-unchanged.
+For production-scale batch processing, replace `FastAPI BackgroundTasks` with a task queue (e.g. Celery + Redis) — the `orchestrator.run_pipeline` interface is unchanged.

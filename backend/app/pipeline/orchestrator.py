@@ -2,31 +2,54 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from sqlalchemy.orm import Session
+from concurrent.futures import ThreadPoolExecutor
 
 from app.models import Upload, ParsedRow
 from app.pipeline import extractor, spatial_parser, regex_pass, normalizer, validator, llm_enricher
 from app.utils.file_store import get_pdf_path
+from app.config import MAX_CONCURRENT_JOBS
 
 logger = logging.getLogger(__name__)
 
 _semaphore: asyncio.Semaphore | None = None
+# Thread pool sized to MAX_CONCURRENT_JOBS — each pipeline run gets its own thread
+# so blocking pdfplumber / OpenAI calls never freeze the event loop
+_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 
 
 def _get_semaphore() -> asyncio.Semaphore:
     global _semaphore
     if _semaphore is None:
-        from app.config import MAX_CONCURRENT_JOBS
         _semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
     return _semaphore
 
 
-async def run_pipeline(upload_id: str, db: Session) -> None:
+async def run_pipeline(upload_id: str) -> None:
+    """
+    Enqueue a pipeline run from FastAPI BackgroundTasks.
+    Runs the blocking pipeline in a thread-pool worker so the event loop
+    stays free to serve status-poll requests while PDFs are being parsed.
+    """
     async with _get_semaphore():
-        await _execute_pipeline(upload_id, db)
+        await asyncio.get_event_loop().run_in_executor(
+            _executor, _run_pipeline_sync, upload_id
+        )
 
 
-async def _execute_pipeline(upload_id: str, db: Session) -> None:
+def _run_pipeline_sync(upload_id: str) -> None:
+    """
+    Synchronous pipeline — executes in a thread-pool worker.
+    Creates its own DB session (SQLAlchemy sessions are not thread-safe).
+    """
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        _execute_pipeline(upload_id, db)
+    finally:
+        db.close()
+
+
+def _execute_pipeline(upload_id: str, db) -> None:
     upload = db.get(Upload, upload_id)
     if not upload:
         logger.error(f"Upload {upload_id} not found")
@@ -68,7 +91,6 @@ async def _execute_pipeline(upload_id: str, db: Session) -> None:
 
         all_rows = normalizer.normalize_blocks(all_blocks, start_sr=1)
 
-        # Renumber SR# globally
         for i, row in enumerate(all_rows, start=1):
             row.sr_number = i
 
@@ -94,7 +116,7 @@ async def _execute_pipeline(upload_id: str, db: Session) -> None:
 
 
 async def run_pipeline_from_path(pdf_path: str | Path) -> list[normalizer.NormalizedRow]:
-    """Convenience function for testing — runs pipeline without DB."""
+    """Convenience wrapper for tests — runs pipeline without DB."""
     pages_words = extractor.extract_page_words(pdf_path)
     all_blocks = []
 

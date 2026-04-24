@@ -57,12 +57,20 @@ def test_normalize_multi_cn_dt_block():
 
 
 def test_normalize_same_line_pair_blocks():
-    # BATT-POSITIVE pattern: two separate RawBlocks (one per pair)
-    block1 = RawBlock(page=1, device="BATT-POSTIVE", cn_list=["R1MT-10655-AA"], dt_list=["DT-R1MT-10655-AA_A"], variant_list=[""], x0=300, top=200)
-    block2 = RawBlock(page=1, device=None, cn_list=["DS7T-10655-AC"], dt_list=["DT-DS7T-10655-AA_D"], variant_list=[""], x0=300, top=220)
-    rows = normalize_blocks([block1, block2])
+    # BATT-POSITIVE pattern: both CN/DT pairs share the same x0 column in the schematic,
+    # so the spatial parser groups them into ONE block under the BATT-POSTIVE label.
+    # Both DTs share part base "10655" (dual-source: R1MT=70AH, DS7T=80AH variants)
+    # so device must repeat on BOTH rows.
+    block = RawBlock(
+        page=1, device="BATT-POSTIVE",
+        cn_list=["R1MT-10655-AA", "DS7T-10655-AC"],
+        dt_list=["DT-R1MT-10655-AA_A", "DT-DS7T-10655-AA_D"],
+        variant_list=["", ""],
+        x0=300, top=200,
+    )
+    rows = normalize_blocks([block])
     assert len(rows) == 2
     assert rows[0].device == "BATT-POSTIVE"
-    assert rows[1].device is None
+    assert rows[1].device == "BATT-POSTIVE"   # same part base "10655" → device repeats
     assert rows[0].dt == "DT-R1MT-10655-AA"
     assert rows[1].dt == "DT-DS7T-10655-AA"

@@ -46,22 +46,31 @@ def strip_dt_suffix(dt_raw: str) -> str:
 
 def _same_dt_family(dt_list: list[str]) -> bool:
     """
-    Returns True if all DT values share the same base part family
-    (i.e., same first three hyphen-separated segments: DT-<mfr>-<base>).
-    PDB-EXT: all DT-W3KT-14D068-* → same family → repeat device on all rows.
-    BATT-POSTIVE: DT-R1MT-10655-AA + DT-DS7T-10655-AA → different → only first row gets device.
+    Returns True if all DT values share the same base part number.
+
+    Comparison uses the 3rd hyphen-segment (part base number) only, ignoring
+    the manufacturer prefix (2nd segment). This correctly handles dual-source
+    variants where the same physical component has different manufacturer codes:
+
+      DT-R1MT-10655-AA  (70AH battery, mfr R1MT)
+      DT-DS7T-10655-AA  (80AH battery, mfr DS7T)
+      → both share part base "10655" → same device (BATT-POSTIVE) on all rows.
+
+      DT-W3KT-14D068-AA / EA / GA / PA / HA  (PDB-EXT variants)
+      → all share part base "14D068" → same device on all rows.
     """
     dt_vals = [d for d in dt_list if d]
     if len(dt_vals) <= 1:
         return True
-    families = set()
+    part_bases = set()
     for dt in dt_vals:
         parts = dt.split("-")
+        # DT-<mfr>-<part_base>-<variant> → index 2 is the part base number
         if len(parts) >= 3:
-            families.add("-".join(parts[:3]))  # e.g. "DT-W3KT-14D068"
+            part_bases.add(parts[2])  # e.g. "10655", "14D068"
         else:
-            families.add(dt)
-    return len(families) == 1
+            part_bases.add(dt)
+    return len(part_bases) == 1
 
 
 def normalize_blocks(blocks: list[RawBlock], start_sr: int = 1) -> list[NormalizedRow]:

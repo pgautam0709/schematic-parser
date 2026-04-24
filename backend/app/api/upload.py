@@ -44,7 +44,7 @@ async def upload_pdfs(
 
         saved_path = save_pdf(upload_id, file)
 
-        background_tasks.add_task(_run_async_pipeline, upload_id, db)
+        background_tasks.add_task(run_pipeline, upload_id)
 
         responses.append(UploadResponse(
             upload_id=upload.id,
@@ -54,8 +54,3 @@ async def upload_pdfs(
         ))
 
     return responses
-
-
-async def _run_async_pipeline(upload_id: str, db: Session):
-    import asyncio
-    await run_pipeline(upload_id, db)

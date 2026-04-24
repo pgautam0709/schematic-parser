@@ -35,13 +35,15 @@ def enrich_page(raw_text: str, page_num: int) -> list[RawBlock]:
     """
     Call Azure OpenAI GPT-4o to extract device blocks from a page's raw text.
     Returns a list of RawBlock objects (source='llm').
-    Mandatory pipeline stage — raises RuntimeError if Azure credentials are missing.
+    Optional stage — returns empty list if Azure credentials are not configured.
     """
     if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
-        raise RuntimeError(
-            "Azure OpenAI credentials not configured. "
-            "Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT in your .env file."
+        logger.warning(
+            "Azure OpenAI credentials not configured — skipping LLM enrichment for page %d. "
+            "Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT in your .env file to enable.",
+            page_num,
         )
+        return []
 
     from openai import AzureOpenAI
 

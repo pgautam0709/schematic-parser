@@ -8,6 +8,6 @@
     {"sr_number": 6, "page_number": 1, "device": "PDB-EXT",      "dt": "DT-W3KT-14D068-HA"},
     {"sr_number": 7, "page_number": 1, "device": "SN-BMS",       "dt": "DT-PZ3T-10C652-AX"},
     {"sr_number": 8, "page_number": 1, "device": "BATT-POSTIVE", "dt": "DT-R1MT-10655-AA"},
-    {"sr_number": 9, "page_number": 1, "device": null,           "dt": "DT-DS7T-10655-AA"}
+    {"sr_number": 9, "page_number": 1, "device": "BATT-POSTIVE", "dt": "DT-DS7T-10655-AA"}
   ]
 }
