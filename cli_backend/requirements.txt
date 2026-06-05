@@ -1,0 +1,6 @@
+pdfplumber>=0.10.0
+PyMuPDF>=1.23.0
+openai>=1.13.0
+google-cloud-aiplatform>=1.49.0
+openpyxl>=3.1.0
+python-dotenv>=1.0.0
