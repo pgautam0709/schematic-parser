@@ -1,6 +1,54 @@
 # Schematic Parser
 
-A web application that parses electrical schematic PDFs and extracts a **Device → Device Tree (DT)** mapping table — one row per connector variant, ready for download.
+Parses Ford electrical schematic PDFs and extracts a **Device → Device Tree (DT)** mapping table — one row per connector variant, ready for download.
+
+Two modes are available:
+
+| Mode | When to use |
+|------|-------------|
+| **Web app** (`backend` + `frontend`) | Interactive use — drag-drop PDFs in a browser, view results, export CSV/Excel |
+| **CLI** (`cli_backend`) | Scripted/batch use — parse PDFs from the command line, output Excel directly |
+
+---
+
+## Quick Start
+
+### Web App
+
+```bash
+# 1. Start the API server
+cd backend
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env          # set AZURE_OPENAI_API_KEY + AZURE_OPENAI_ENDPOINT
+bash start.sh                 # API at http://localhost:8000
+
+# 2. Start the frontend (separate terminal)
+cd frontend
+npm install
+npm run dev                   # UI at http://localhost:5173
+```
+
+Open `http://localhost:5173`, drag in one or more schematic PDFs, click **Parse**, then **View Results** when done. Export as CSV or Excel from the results panel.
+
+### CLI
+
+```bash
+cd cli_backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # set LLM_PROVIDER + credentials (or leave blank for spatial-only)
+
+# Parse one or more PDFs → output.xlsx
+python parse_schematics.py schematic.pdf --output results.xlsx
+
+# Multiple PDFs → one combined file
+python parse_schematics.py file1.pdf file2.pdf --output combined.xlsx
+
+# No LLM (spatial parser only, no cloud credentials needed)
+python parse_schematics.py schematic.pdf --no-llm --output results.xlsx
+```
+
+See [`cli_backend/README.md`](cli_backend/README.md) for full CLI options, LLM provider setup (Azure / GCP), and confidence score details.
 
 ---
 
